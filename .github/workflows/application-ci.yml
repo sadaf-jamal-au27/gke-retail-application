@@ -1,0 +1,22 @@
+name: Application CI
+on:
+  push:
+    branches: [main]
+    paths: ["apps/**", "services/**", "packages/**", "scripts/**", "package.json", "pnpm-lock.yaml"]
+  pull_request:
+    paths: ["apps/**", "services/**", "packages/**", "scripts/**", "package.json", "pnpm-lock.yaml"]
+jobs:
+  build:
+    name: Application CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --no-frozen-lockfile
+      - run: |
+          pnpm --filter @retail/service-core build
+          pnpm --filter @retail/bff-api-service build
+          pnpm --filter @retail/storefront build
