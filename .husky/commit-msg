@@ -1,0 +1,5 @@
+#!/bin/sh
+# Validate commit message against Conventional Commits convention
+# See: .github/COMMIT_CONVENTION.md
+
+./node_modules/.bin/commitlint --edit "$1"

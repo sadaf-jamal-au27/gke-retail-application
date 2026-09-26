@@ -1,0 +1,5 @@
+#!/bin/sh
+# Pre-commit hook
+# Add lint-staged or other fast checks here if needed.
+# Commit message validation happens in commit-msg hook.
+exit 0
