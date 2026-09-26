@@ -112,7 +112,7 @@ jobs:
             echo 'services=[]' >> "$GITHUB_OUTPUT"
             echo 'matrix={"service":[]}' >> "$GITHUB_OUTPUT"
           else
-            json_arr=$(echo "$changed" | tr ' ' '\n' | grep -v '^$' | jq -Rn '[inputs]' || echo '[]')
+            json_arr=$(echo "$changed" | tr ' ' '\n' | grep -v '^$' | jq -Rcn '[inputs]' || echo '[]')
             echo "services=$changed" >> "$GITHUB_OUTPUT"
             echo "matrix={\"service\":$json_arr}" >> "$GITHUB_OUTPUT"
           fi
