@@ -16,4 +16,7 @@
 # Cannot upgrade directly — waiting on @google-cloud/pubsub to update gaxios.
 # Impact: low — we do not call uuid with a user-controlled buffer argument.
 # Track: https://github.com/advisories/GHSA-w5hq-g745-h8pq
+# NOTE: Trivy uses NVD CVE ID for container image scans, GHSA ID for FS scans.
+#       Both IDs must be listed to suppress across all scan types.
 GHSA-w5hq-g745-h8pq
+CVE-2026-41907
