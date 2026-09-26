@@ -1,4 +1,4 @@
-# Required GitHub status checks (branch protection)
+# Required GitHub status checks - branch protection
 
 Enable these **required status checks** on `main` for pull requests:
 

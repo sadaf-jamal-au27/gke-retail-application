@@ -17,9 +17,14 @@
     "docker:build": "bash scripts/docker-build-all.sh",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
-    "docker:logs": "docker compose logs -f"
+    "docker:logs": "docker compose logs -f",
+    "prepare": "husky",
+    "commitlint": "commitlint --edit"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
+    "concurrently": "^9.1.2",
+    "husky": "^9.1.7"
   }
 }
