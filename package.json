@@ -11,9 +11,14 @@
     "dev:stop": "bash scripts/dev-stop.sh",
     "dev:auto": "bash scripts/dev-automobile.sh",
     "build": "pnpm -r build",
-    "test:e2e": "bash testing/e2e/run-smoke.sh"
+    "test:e2e": "bash testing/e2e/run-smoke.sh",
+    "prepare": "husky",
+    "commitlint": "commitlint --edit"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "@commitlint/cli": "^21.2.3",
+    "@commitlint/config-conventional": "^21.2.3",
+    "concurrently": "^9.1.2",
+    "husky": "^9.1.7"
   }
 }

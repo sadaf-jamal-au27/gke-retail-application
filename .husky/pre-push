@@ -1,0 +1,20 @@
+#!/bin/sh
+# Block direct push to main or develop
+# Use a feature branch + PR instead
+
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+PROTECTED="main develop"
+
+for b in $PROTECTED; do
+  if [ "$BRANCH" = "$b" ]; then
+    echo ""
+    echo "🚫  Direct push to '$BRANCH' is NOT allowed!"
+    echo ""
+    echo "    Use the GitFlow workflow:"
+    echo "    1. git checkout -b feature/your-feature"
+    echo "    2. git push origin feature/your-feature"
+    echo "    3. gh pr create --base $BRANCH"
+    echo ""
+    exit 1
+  fi
+done
