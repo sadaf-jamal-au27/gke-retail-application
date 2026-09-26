@@ -384,6 +384,77 @@ select {
   color: var(--success);
 }
 
+.error {
+  color: #f87171;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.stack-form {
+  display: grid;
+  gap: 0.85rem;
+  max-width: 28rem;
+}
+
+.stack-form label {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.stack-form input {
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface, #111);
+  color: inherit;
+}
+
+.linkish {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+}
+
+.nav-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.muted-inline {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.auth-page {
+  max-width: 32rem;
+}
+
+.orders-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.orders-list .card {
+  padding: 1rem;
+}
+
+.stack-form select {
+  padding: 0.65rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface, #111);
+  color: inherit;
+}
+
 .live-count {
   color: #fca5a5;
   font-size: 0.9rem;

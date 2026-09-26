@@ -4,8 +4,8 @@ import { registerRoutes } from "./routes.js";
 const service = createService({
   name: "auth-service",
   domain: "identity",
-  port: Number(process.env.PORT ?? "3001"),
-  pubsubEvents: ["user.authenticated","user.logout"],
+  port: Number(process.env.PORT ?? "3111"),
+  pubsubEvents: ["user.authenticated", "user.logout"],
   enableDatabase: true,
 });
 

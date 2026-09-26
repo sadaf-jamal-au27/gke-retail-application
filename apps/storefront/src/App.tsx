@@ -8,6 +8,8 @@ import { FinancePage } from "./pages/FinancePage";
 import { ServicePage } from "./pages/ServicePage";
 import { TradeInPage } from "./pages/TradeInPage";
 import { CheckoutPage } from "./pages/CheckoutPage";
+import { LoginPage } from "./pages/LoginPage";
+import { OrdersPage } from "./pages/OrdersPage";
 
 export function App() {
   return (
@@ -23,6 +25,8 @@ export function App() {
           <Route path="/service" element={<ServicePage />} />
           <Route path="/trade-in" element={<TradeInPage />} />
           <Route path="/checkout/:vehicleId" element={<CheckoutPage />} />
+          <Route path="/orders" element={<OrdersPage />} />
+          <Route path="/login" element={<LoginPage />} />
         </Routes>
       </main>
       <SiteFooter />

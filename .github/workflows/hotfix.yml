@@ -1,0 +1,127 @@
+name: Hotfix Fast-Track
+
+# ─────────────────────────────────────────────────────────
+# Hotfix workflow — triggered when hotfix/* is merged to main.
+# Automatically back-merges main → develop so develop stays
+# up-to-date with the fix.
+#
+# Flow:
+#   1. Developer cuts: git checkout -b hotfix/CVE-1234 main
+#   2. Fixes the bug, pushes, opens PR → main
+#   3. PR fast-check + full CI run automatically
+#   4. On merge to main: this workflow back-merges to develop
+# ─────────────────────────────────────────────────────────
+
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  back-merge:
+    name: Back-merge hotfix into develop
+    runs-on: ubuntu-latest
+    # Only run when a hotfix/* branch is merged (not just closed)
+    if: >-
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'hotfix/')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Back-merge main → develop
+        id: merge
+        run: |
+          HOTFIX="${{ github.event.pull_request.head.ref }}"
+          echo "Hotfix branch: $HOTFIX"
+
+          # Fetch latest
+          git fetch origin main develop
+
+          # Try clean merge
+          git checkout develop
+          git pull origin develop
+
+          if git merge --no-ff origin/main -m "chore: back-merge ${HOTFIX} from main into develop [skip ci]"; then
+            git push origin develop
+            echo "status=success" >> "$GITHUB_OUTPUT"
+            echo "✅ Back-merged main → develop"
+          else
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+            echo "⚠️  Merge conflict — opening a PR instead"
+            git merge --abort || true
+          fi
+
+      # If there are conflicts, open a PR for manual resolution
+      - name: Open back-merge PR on conflict
+        if: steps.merge.outputs.status == 'conflict'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const hotfix = "${{ github.event.pull_request.head.ref }}";
+            const sha = context.sha.substring(0, 7);
+            const branchName = `auto/back-merge-${hotfix.replace(/\//g, '-')}-${sha}`;
+
+            // Create a temp branch from main
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              ref:   `refs/heads/${branchName}`,
+              sha:   context.sha,
+            });
+
+            // Open PR to develop
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              title: `chore: back-merge ${hotfix} into develop`,
+              body: [
+                `## Hotfix Back-merge`,
+                ``,
+                `Automatic back-merge of \`${hotfix}\` from \`main\` → \`develop\` failed due to conflicts.`,
+                ``,
+                `**Please resolve conflicts and merge this PR to keep \`develop\` up-to-date.**`,
+                ``,
+                `> This PR was created automatically by the hotfix workflow.`,
+              ].join('\n'),
+              head: branchName,
+              base: 'develop',
+              draft: false,
+            });
+
+            core.notice(`Created back-merge PR: ${pr.html_url}`);
+
+            // Label it
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: pr.number,
+              labels: ['hotfix', 'back-merge', 'needs-review'],
+            }).catch(() => {});
+
+      - name: Post summary
+        if: always()
+        run: |
+          STATUS="${{ steps.merge.outputs.status }}"
+          HOTFIX="${{ github.event.pull_request.head.ref }}"
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          ## Hotfix Back-merge
+
+          | Field | Value |
+          |-------|-------|
+          | Hotfix branch | \`${HOTFIX}\` |
+          | Merged to main | ✅ |
+          | Back-merge to develop | $( [[ "$STATUS" == "success" ]] && echo "✅ Auto-merged" || echo "⚠️ PR created — resolve conflicts manually" ) |
+          EOF

@@ -6,7 +6,8 @@ export function registerRoutes(app: FastifyInstance, deps: ServiceDeps): void {
     service: "payment-service",
     domain: "commerce",
     version: process.env.SERVICE_VERSION ?? "1.0.0",
-    events: ["payment.authorized","payment.captured"],
+    events: ["payment.authorized", "payment.captured"],
+    note: "Auto retail captures via auto-order-service POST /v1/orders/:id/pay (local stub).",
   }));
 
   app.get("/v1/payment/health-detail", async () => ({

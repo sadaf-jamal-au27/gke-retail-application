@@ -1,0 +1,203 @@
+name: Release
+
+# ─────────────────────────────────────────────────────────
+# Triggered when a release/* branch is merged into main.
+# Creates a GitHub Release with changelog from PR body,
+# tags images as :v*.* in Artifact Registry, and
+# sends a deploy notification to the DevOps repo.
+# ─────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches:
+      - main
+    # Only run when a version tag is pushed, OR manually
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v1.2.0)"
+        required: true
+      prerelease:
+        description: "Mark as pre-release?"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write     # create GitHub Release + tag
+  id-token: write     # WIF for AR
+  packages: write
+
+env:
+  PROJECT_ID: ai-rag-agent-project
+  REGION: asia-south1
+  REGISTRY: asia-south1-docker.pkg.dev/ai-rag-agent-project/retail
+  ALL_SERVICES: >-
+    auth-service vehicle-catalog-service vehicle-inventory-service
+    dealership-service auto-pricing-service test-drive-service
+    auto-cart-service auto-order-service auto-finance-service
+    service-appointment-service trade-in-service bff-api-service
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/heads/main'))
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag:     ${{ steps.version.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            # Try to extract from the last merged branch name
+            MERGED=$(git log --merges -1 --pretty=format:"%s" || echo "")
+            V=$(echo "$MERGED" | grep -oP 'v\d+\.\d+\.\d+' | head -1 || echo "")
+            [[ -z "$V" ]] && V="v$(date -u +%Y.%-m.%-d)"
+          fi
+          echo "version=${V}"           >> "$GITHUB_OUTPUT"
+          echo "tag=${V}"               >> "$GITHUB_OUTPUT"
+          echo "Resolved version: ${V}"
+
+      - name: Generate changelog
+        id: changelog
+        uses: actions/github-script@v7
+        with:
+          result-encoding: string
+          script: |
+            const { data: commits } = await github.rest.repos.listCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              per_page: 30,
+            });
+            const lines = commits.map(c => {
+              const msg = c.commit.message.split('\n')[0];
+              const sha = c.sha.substring(0, 7);
+              return `- ${msg} (\`${sha}\`)`;
+            });
+            return `## What's Changed\n\n${lines.join('\n')}`;
+
+      - name: Create Git tag
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG" 2>/dev/null || echo "Tag already exists"
+          git push origin "$TAG" 2>/dev/null || echo "Tag already pushed"
+
+      - name: Create GitHub Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag     = "${{ steps.version.outputs.tag }}";
+            const body    = `${{ steps.changelog.outputs.result }}`;
+            const prerel  = ${{ github.event.inputs.prerelease || 'false' }};
+
+            try {
+              await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                tag_name: tag,
+                name:     `Release ${tag}`,
+                body:     body,
+                draft:    false,
+                prerelease: prerel,
+              });
+              core.notice(`Created GitHub Release ${tag}`);
+            } catch(e) {
+              if (e.status === 422) {
+                core.warning(`Release ${tag} already exists — skipping`);
+              } else {
+                throw e;
+              }
+            }
+
+  tag-images:
+    name: Tag images with release version
+    runs-on: ubuntu-latest
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - auth-service
+          - vehicle-catalog-service
+          - vehicle-inventory-service
+          - dealership-service
+          - auto-pricing-service
+          - test-drive-service
+          - auto-cart-service
+          - auto-order-service
+          - auto-finance-service
+          - service-appointment-service
+          - trade-in-service
+          - bff-api-service
+
+    steps:
+      - name: Authenticate to GCP (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_CI_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker → Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Tag :stable → :v*.*.*
+        run: |
+          VERSION="${{ needs.create-release.outputs.version }}"
+          IMAGE="${{ env.REGISTRY }}/${{ matrix.service }}"
+
+          # Pull the stable image that was pushed by the main CI run
+          docker pull "${IMAGE}:stable" 2>/dev/null || {
+            echo "⚠️  :stable not found yet — trying :latest"
+            docker pull "${IMAGE}:latest"
+            docker tag "${IMAGE}:latest" "${IMAGE}:stable"
+          }
+
+          # Tag with semantic version
+          docker tag "${IMAGE}:stable" "${IMAGE}:${VERSION}"
+          docker push "${IMAGE}:${VERSION}"
+          echo "✅ Tagged ${IMAGE}:${VERSION}"
+
+  notify-devops:
+    name: Notify DevOps repo to deploy
+    runs-on: ubuntu-latest
+    needs: [create-release, tag-images]
+    if: success()
+    steps:
+      - name: Dispatch deploy event to DevOps repo
+        uses: actions/github-script@v7
+        with:
+          # Set secret DEVOPS_REPO_TOKEN with a PAT that has repo:write on your DevOps repo
+          github-token: ${{ secrets.DEVOPS_REPO_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const version = "${{ needs.create-release.outputs.version }}";
+            // Change owner/repo to your DevOps repository
+            try {
+              await github.rest.repos.createDispatchEvent({
+                owner: context.repo.owner,
+                repo:  "gke-retail-devops",
+                event_type: "deploy-production",
+                client_payload: {
+                  version:    version,
+                  sha:        context.sha,
+                  registry:   "${{ env.REGISTRY }}",
+                  services:   "${{ env.ALL_SERVICES }}",
+                  triggered_by: context.actor,
+                },
+              });
+              core.notice(`Dispatched deploy-production event for ${version} to DevOps repo`);
+            } catch(e) {
+              core.warning(`Could not notify DevOps repo: ${e.message}`);
+            }

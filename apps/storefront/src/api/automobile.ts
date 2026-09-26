@@ -1,3 +1,5 @@
+import { getAccessToken } from "./auth";
+
 const SESSION_KEY = "autodrive_session_id";
 
 export function getSessionId(): string {
@@ -12,11 +14,13 @@ export function getSessionId(): string {
 const base = import.meta.env.VITE_API_BASE ?? "/api";
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getAccessToken();
   const res = await fetch(`${base}${path}`, {
     ...init,
     headers: {
       "content-type": "application/json",
       "x-session-id": getSessionId(),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
   });
@@ -63,11 +67,104 @@ export const automobileApi = {
       body: JSON.stringify({ vehicleId }),
     }),
   financeEmi: (payload: { onRoadPriceInr: number; downPaymentInr: number; tenureMonths: number }) =>
-    api<{ emiInr: number; totalPayableInr: number }>("/storefront/finance/emi", { method: "POST", body: JSON.stringify(payload) }),
-  bookTestDrive: (payload: Record<string, string>) => api<{ id: string }>("/storefront/test-drives", { method: "POST", body: JSON.stringify(payload) }),
-  tradeIn: (payload: Record<string, unknown>) => api<{ valueInr: number; id: string; validUntil: string }>("/storefront/trade-in/estimate", { method: "POST", body: JSON.stringify(payload) }),
-  serviceBooking: (payload: Record<string, string>) => api<{ id: string }>("/storefront/service/appointments", { method: "POST", body: JSON.stringify(payload) }),
-  checkout: (payload: Record<string, unknown>) => api<{ order: { id: string; status: string } }>("/storefront/checkout", { method: "POST", body: JSON.stringify(payload) }),
+    api<{ emiInr: number; totalPayableInr: number; principalInr: number; aprPercent: number }>(
+      "/storefront/finance/emi",
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  financeApply: (payload: {
+    vehicleId: string;
+    onRoadPriceInr: number;
+    downPaymentInr: number;
+    tenureMonths: number;
+    aprPercent?: number;
+    orderId?: string;
+  }) =>
+    api<{
+      id: string;
+      status: string;
+      emiInr: number;
+      principalInr: number;
+      totalPayableInr: number;
+      aprPercent: number;
+    }>("/storefront/finance/apply", { method: "POST", body: JSON.stringify(payload) }),
+  myFinanceApplications: () =>
+    api<{
+      items: {
+        id: string;
+        vehicleId: string;
+        orderId: string | null;
+        emiInr: number;
+        principalInr: number;
+        totalPayableInr: number;
+        tenureMonths: number;
+        aprPercent: number;
+        status: string;
+        createdAt: string;
+      }[];
+    }>("/storefront/finance/applications/mine"),
+  bookTestDrive: (payload: Record<string, string>) =>
+    api<{ id: string; status: string }>("/storefront/test-drives", { method: "POST", body: JSON.stringify(payload) }),
+  myTestDrives: () => api<{ items: unknown[] }>("/storefront/test-drives/mine"),
+  getCart: () =>
+    api<{
+      id: string;
+      customerId: string;
+      vehicleId: string | null;
+      accessories: { sku: string; name: string; priceInr: number; qty: number }[];
+      accessoriesTotalInr: number;
+    }>("/storefront/cart"),
+  upsertCart: (vehicleId?: string) =>
+    api<{ id: string; vehicleId: string | null }>("/storefront/carts", {
+      method: "POST",
+      body: JSON.stringify({ vehicleId }),
+    }),
+  myOrders: () =>
+    api<{
+      items: {
+        id: string;
+        vehicleId: string;
+        dealershipId: string;
+        totalInr: number;
+        status: string;
+        paymentStatus: string;
+        paidAt: string | null;
+        reservedVin: string | null;
+        createdAt: string;
+      }[];
+    }>("/storefront/orders/mine"),
+  payOrder: (orderId: string, method = "upi") =>
+    api<{
+      alreadyPaid: boolean;
+      order: { id: string; status: string; paymentStatus: string };
+      payment: { id: string; method: string; providerRef: string } | null;
+    }>(`/storefront/orders/${encodeURIComponent(orderId)}/pay`, {
+      method: "POST",
+      body: JSON.stringify({ method }),
+    }),
+  tradeIn: (payload: Record<string, unknown>) =>
+    api<{ valueInr: number; id: string; validUntil: string }>("/storefront/trade-in/estimate", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  serviceBooking: (payload: Record<string, string>) =>
+    api<{ id: string }>("/storefront/service/appointments", { method: "POST", body: JSON.stringify(payload) }),
+  myServiceAppointments: () =>
+    api<{
+      items: {
+        id: string;
+        vehicleReg: string;
+        serviceType: string;
+        slot: string;
+        dealershipId: string;
+        status: string;
+        createdAt: string;
+      }[];
+    }>("/storefront/service/appointments/mine"),
+  checkout: (payload: Record<string, unknown>) =>
+    api<{ order: { id: string; status: string; reservedVin?: string | null }; quote: { onRoadPriceInr: number } }>(
+      "/storefront/checkout",
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
 };
 
 export function inr(n: number) {
