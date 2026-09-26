@@ -6,6 +6,7 @@ COPY packages/service-core ./packages/service-core
 COPY packages/automobile-db ./packages/automobile-db
 COPY services/auto-pricing-service ./services/auto-pricing-service
 RUN corepack enable && pnpm install --frozen-lockfile
+RUN pnpm --filter @retail/service-core build
 RUN pnpm --filter @retail/automobile-db build
 RUN pnpm --filter @retail/auto-pricing-service build
 
