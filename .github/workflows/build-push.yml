@@ -104,15 +104,15 @@ jobs:
             fi
           fi
 
-          changed="$(echo $changed | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')"
+          changed="$(echo $changed | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' || true)"
           echo "Services to build: $changed"
 
-          if [[ -z "$changed" ]]; then
+          if [[ -z "${changed// }" ]]; then
             echo "No services changed — skipping"
             echo 'services=[]' >> "$GITHUB_OUTPUT"
             echo 'matrix={"service":[]}' >> "$GITHUB_OUTPUT"
           else
-            json_arr=$(echo "$changed" | tr ' ' '\n' | grep -v '^$' | jq -Rn '[inputs]')
+            json_arr=$(echo "$changed" | tr ' ' '\n' | grep -v '^$' | jq -Rn '[inputs]' || echo '[]')
             echo "services=$changed" >> "$GITHUB_OUTPUT"
             echo "matrix={\"service\":$json_arr}" >> "$GITHUB_OUTPUT"
           fi
