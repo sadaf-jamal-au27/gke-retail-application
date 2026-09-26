@@ -6,6 +6,7 @@ COPY packages/service-core ./packages/service-core
 COPY packages/automobile-db ./packages/automobile-db
 COPY services/vehicle-catalog-service ./services/vehicle-catalog-service
 RUN corepack enable && pnpm install --frozen-lockfile
+RUN pnpm --filter @retail/service-core build
 RUN pnpm --filter @retail/automobile-db build
 RUN pnpm --filter @retail/vehicle-catalog-service build
 

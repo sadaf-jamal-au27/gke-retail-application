@@ -5,6 +5,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/service-core ./packages/service-core
 COPY services/payment-service ./services/payment-service
 RUN corepack enable && pnpm install --frozen-lockfile
+RUN pnpm --filter @retail/service-core build
 RUN pnpm --filter @retail/payment-service build
 
 FROM gcr.io/distroless/nodejs22-debian12:nonroot
