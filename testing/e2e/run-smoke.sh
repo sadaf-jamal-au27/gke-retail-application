@@ -2,7 +2,7 @@
 # End-to-end smoke: Postgres + migrations + build automobile stack + HTTP checks.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"   # repo root (testing/e2e → testing → root)
 cd "$ROOT"
 
 export DB_HOST=127.0.0.1 DB_PORT=5432 DB_USER=retail_app DB_PASSWORD=retail DB_NAME=retail DB_SSL=false
