@@ -1,4 +1,4 @@
-# Required GitHub Secrets
+# Requires GitHub Secrets
 
 Set these in: **GitHub repo → Settings → Secrets and variables → Actions**
 
