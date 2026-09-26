@@ -2,8 +2,8 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
-COPY packages/service-core ./application/packages/service-core
-COPY services/review-service ./application/services/review-service
+COPY packages/service-core ./packages/service-core
+COPY services/review-service ./services/review-service
 RUN corepack enable && pnpm install --frozen-lockfile
 RUN pnpm --filter @retail/review-service build
 
@@ -13,6 +13,8 @@ ENV NODE_ENV=production
 COPY --from=build /app/services/review-service/dist ./dist
 COPY --from=build /app/services/review-service/package.json ./
 COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages/service-core/dist ./node_modules/@retail/service-core/dist
+COPY --from=build /app/packages/service-core/package.json ./node_modules/@retail/service-core/package.json
 USER nonroot
 EXPOSE 8080
 CMD ["dist/index.js"]

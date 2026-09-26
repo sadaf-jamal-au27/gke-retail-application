@@ -1,4 +1,26 @@
+name: retail
+
+# ─────────────────────────────────────────────
+# Common DB environment injected into every service
+# ─────────────────────────────────────────────
+x-db-env: &db-env
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USER: retail_app
+  DB_PASSWORD: retail
+  DB_NAME: retail
+  DB_SSL: "false"
+  NODE_ENV: production
+
+# Shared healthcheck for all services
+x-svc-healthcheck: &svc-healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 20s
+
 services:
+  # ── Postgres ────────────────────────────────
   postgres:
     image: postgres:15-alpine
     container_name: retail-postgres
@@ -14,7 +36,280 @@ services:
       test: ["CMD-SHELL", "pg_isready -U retail_app -d retail"]
       interval: 3s
       timeout: 5s
-      retries: 10
+      retries: 15
+
+  # ── DB migration job (runs once, exits) ─────
+  migrate:
+    image: postgres:15-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./db/migrations:/migrations
+    entrypoint: >
+      sh -c "
+        for f in /migrations/*.sql; do
+          echo \"Applying $$f\";
+          PGPASSWORD=retail psql -h postgres -U retail_app -d retail -v ON_ERROR_STOP=1 -f $$f;
+        done;
+        echo 'Migrations complete.'
+      "
+    restart: "no"
+
+  # ── Auth (3111) ──────────────────────────────
+  auth-service:
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    image: retail/auth-service:local
+    container_name: retail-auth
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3111:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/auth/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── Vehicle Catalog (3101) ───────────────────
+  vehicle-catalog-service:
+    build:
+      context: .
+      dockerfile: services/vehicle-catalog-service/Dockerfile
+    image: retail/vehicle-catalog-service:local
+    container_name: retail-catalog
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3101:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/vehicle-catalog/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── Dealership (3102) ────────────────────────
+  dealership-service:
+    build:
+      context: .
+      dockerfile: services/dealership-service/Dockerfile
+    image: retail/dealership-service:local
+    container_name: retail-dealer
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3102:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/dealership/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── Vehicle Inventory (3103) ─────────────────
+  vehicle-inventory-service:
+    build:
+      context: .
+      dockerfile: services/vehicle-inventory-service/Dockerfile
+    image: retail/vehicle-inventory-service:local
+    container_name: retail-inventory
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3103:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/vehicle-inventory/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── Auto Pricing (3104) ──────────────────────
+  auto-pricing-service:
+    build:
+      context: .
+      dockerfile: services/auto-pricing-service/Dockerfile
+    image: retail/auto-pricing-service:local
+    container_name: retail-pricing
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3104:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/auto-pricing/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── Test Drive (3105) ────────────────────────
+  test-drive-service:
+    build:
+      context: .
+      dockerfile: services/test-drive-service/Dockerfile
+    image: retail/test-drive-service:local
+    container_name: retail-testdrive
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3105:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/test-drive/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── Auto Cart (3106) ─────────────────────────
+  auto-cart-service:
+    build:
+      context: .
+      dockerfile: services/auto-cart-service/Dockerfile
+    image: retail/auto-cart-service:local
+    container_name: retail-cart
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3106:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/auto-cart/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── Auto Order (3107) ────────────────────────
+  auto-order-service:
+    build:
+      context: .
+      dockerfile: services/auto-order-service/Dockerfile
+    image: retail/auto-order-service:local
+    container_name: retail-order
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3107:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/auto-order/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── Auto Finance (3108) ──────────────────────
+  auto-finance-service:
+    build:
+      context: .
+      dockerfile: services/auto-finance-service/Dockerfile
+    image: retail/auto-finance-service:local
+    container_name: retail-finance
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3108:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/auto-finance/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── Service Appointment (3109) ───────────────
+  service-appointment-service:
+    build:
+      context: .
+      dockerfile: services/service-appointment-service/Dockerfile
+    image: retail/service-appointment-service:local
+    container_name: retail-service-appt
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3109:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/service-appointment/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── Trade-In (3110) ──────────────────────────
+  trade-in-service:
+    build:
+      context: .
+      dockerfile: services/trade-in-service/Dockerfile
+    image: retail/trade-in-service:local
+    container_name: retail-tradein
+    environment:
+      <<: *db-env
+      PORT: "8080"
+    ports:
+      - "3110:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/trade-in/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
+
+  # ── BFF API (3090) ───────────────────────────
+  bff-api-service:
+    build:
+      context: .
+      dockerfile: services/bff-api-service/Dockerfile
+    image: retail/bff-api-service:local
+    container_name: retail-bff
+    environment:
+      <<: *db-env
+      PORT: "8080"
+      AUTH_URL: http://auth-service:8080
+      VEHICLE_CATALOG_URL: http://vehicle-catalog-service:8080
+      DEALERSHIP_URL: http://dealership-service:8080
+      VEHICLE_INVENTORY_URL: http://vehicle-inventory-service:8080
+      AUTO_PRICING_URL: http://auto-pricing-service:8080
+      TEST_DRIVE_URL: http://test-drive-service:8080
+      AUTO_CART_URL: http://auto-cart-service:8080
+      AUTO_ORDER_URL: http://auto-order-service:8080
+      AUTO_FINANCE_URL: http://auto-finance-service:8080
+      SERVICE_APPOINTMENT_URL: http://service-appointment-service:8080
+      TRADE_IN_URL: http://trade-in-service:8080
+    ports:
+      - "3090:8080"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      vehicle-catalog-service:
+        condition: service_healthy
+      auto-order-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v1/bff/info || exit 1"]
+      <<: *svc-healthcheck
+    restart: unless-stopped
 
 volumes:
   retail_pg_data:

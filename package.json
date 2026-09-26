@@ -11,7 +11,13 @@
     "dev:stop": "bash scripts/dev-stop.sh",
     "dev:auto": "bash scripts/dev-automobile.sh",
     "build": "pnpm -r build",
-    "test:e2e": "bash testing/e2e/run-smoke.sh"
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "test": "pnpm -r --if-present test",
+    "test:e2e": "bash testing/e2e/run-smoke.sh",
+    "docker:build": "bash scripts/docker-build-all.sh",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

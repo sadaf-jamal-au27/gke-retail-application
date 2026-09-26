@@ -2,8 +2,8 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
-COPY packages/service-core ./application/packages/service-core
-COPY services/catalog-search-service ./application/services/catalog-search-service
+COPY packages/service-core ./packages/service-core
+COPY services/catalog-search-service ./services/catalog-search-service
 RUN corepack enable && pnpm install --frozen-lockfile
 RUN pnpm --filter @retail/catalog-search-service build
 
@@ -13,6 +13,8 @@ ENV NODE_ENV=production
 COPY --from=build /app/services/catalog-search-service/dist ./dist
 COPY --from=build /app/services/catalog-search-service/package.json ./
 COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/packages/service-core/dist ./node_modules/@retail/service-core/dist
+COPY --from=build /app/packages/service-core/package.json ./node_modules/@retail/service-core/package.json
 USER nonroot
 EXPOSE 8080
 CMD ["dist/index.js"]

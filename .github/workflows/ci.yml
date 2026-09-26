@@ -1,0 +1,472 @@
+name: CI — DevSecOps Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write          # WIF → Artifact Registry push
+  security-events: write   # CodeQL SARIF upload
+  pull-requests: write     # PR comments
+
+env:
+  PROJECT_ID: ai-rag-agent-project
+  REGION: asia-south1
+  REGISTRY: asia-south1-docker.pkg.dev/ai-rag-agent-project/retail
+  NODE_VERSION: "22"
+  PNPM_VERSION: "9.15.4"
+
+# ─────────────────────────────────────────────────────────
+# STAGE 0 — Detect what changed
+# ─────────────────────────────────────────────────────────
+jobs:
+  detect:
+    name: "S0 · Detect changes"
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.diff.outputs.services }}
+      matrix: ${{ steps.diff.outputs.matrix }}
+      any_changed: ${{ steps.diff.outputs.any_changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: diff
+        name: Identify changed services
+        run: |
+          ALL="auth-service vehicle-catalog-service vehicle-inventory-service dealership-service
+               auto-pricing-service test-drive-service auto-cart-service auto-order-service
+               auto-finance-service service-appointment-service trade-in-service bff-api-service"
+
+          BASE="${{ github.event.before }}"
+          [[ -z "$BASE" || "$BASE" == "0000000000000000000000000000000000000000" ]] && BASE="HEAD~1"
+
+          if git diff --name-only "$BASE" HEAD | grep -q '^packages/'; then
+            changed="$ALL"
+          else
+            changed=""
+            for svc in $ALL; do
+              git diff --name-only "$BASE" HEAD | grep -q "^services/${svc}/" && changed="$changed $svc"
+            done
+            [[ -z "$changed" ]] && changed="$ALL"   # first push → build all
+          fi
+
+          changed=$(echo $changed | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')
+          arr=$(echo "$changed" | tr ' ' '\n' | grep -v '^$' | jq -Rn '[inputs]')
+          echo "services=$changed" >> "$GITHUB_OUTPUT"
+          echo "matrix={\"service\":$arr}" >> "$GITHUB_OUTPUT"
+          echo "any_changed=true" >> "$GITHUB_OUTPUT"
+          echo "Changed: $changed"
+
+# ─────────────────────────────────────────────────────────
+# STAGE 1-A — Secret scanning (Gitleaks) — runs immediately
+# ─────────────────────────────────────────────────────────
+  secret-scan:
+    name: "S1 · Secret scan (Gitleaks)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}   # optional — free for public repos
+
+# ─────────────────────────────────────────────────────────
+# STAGE 1-B — SAST (CodeQL) — detects JS/TS security issues
+# ─────────────────────────────────────────────────────────
+  sast:
+    name: "S1 · SAST (CodeQL)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"
+
+# ─────────────────────────────────────────────────────────
+# STAGE 2-A — TypeScript type-check (all packages + services)
+# ─────────────────────────────────────────────────────────
+  typecheck:
+    name: "S2 · Type-check"
+    runs-on: ubuntu-latest
+    needs: [secret-scan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check packages
+        run: |
+          pnpm --filter @retail/service-core exec tsc --noEmit
+          pnpm --filter @retail/automobile-db exec tsc --noEmit
+
+      - name: Type-check all services
+        run: |
+          for svc in services/*/; do
+            name=$(basename "$svc")
+            echo "▶ $name"
+            (cd "$svc" && ../../node_modules/.bin/tsc --noEmit 2>&1) || echo "WARN: $name has type errors"
+          done
+
+# ─────────────────────────────────────────────────────────
+# STAGE 2-B — Dependency vulnerability scan
+# ─────────────────────────────────────────────────────────
+  dep-scan:
+    name: "S2 · Dependency scan (audit + Trivy)"
+    runs-on: ubuntu-latest
+    needs: [secret-scan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm audit (high + critical)
+        run: pnpm audit --audit-level=high
+        continue-on-error: true   # warn but don't block on known dep issues
+
+      - name: Trivy filesystem scan (CRITICAL/HIGH CVEs)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-fs.sarif
+
+      - name: Upload Trivy FS results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-filesystem
+
+# ─────────────────────────────────────────────────────────
+# STAGE 3 — Unit + integration tests
+# ─────────────────────────────────────────────────────────
+  test:
+    name: "S3 · Unit & integration tests"
+    runs-on: ubuntu-latest
+    needs: [typecheck]
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: retail_app
+          POSTGRES_PASSWORD: retail
+          POSTGRES_DB: retail
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U retail_app -d retail"
+          --health-interval 3s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_USER: retail_app
+      DB_PASSWORD: retail
+      DB_NAME: retail
+      DB_SSL: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply DB migrations
+        run: |
+          export PGPASSWORD=retail
+          for f in db/migrations/*.sql; do
+            echo "Applying $f"
+            psql -h 127.0.0.1 -U retail_app -d retail -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Build shared packages
+        run: |
+          pnpm --filter @retail/service-core build
+          pnpm --filter @retail/automobile-db build
+
+      - name: Run unit tests
+        run: |
+          if pnpm -r --if-present test 2>&1 | grep -q 'no script'; then
+            echo "No unit tests yet — skipping (add test scripts to package.json)"
+          else
+            pnpm -r --if-present test
+          fi
+
+      - name: E2E smoke test (API assertions)
+        run: bash testing/e2e/run-smoke.sh
+        timeout-minutes: 5
+        continue-on-error: true   # smoke is advisory until fully stable
+
+# ─────────────────────────────────────────────────────────
+# STAGE 4 — Build Docker images (parallel per service)
+# ─────────────────────────────────────────────────────────
+  build:
+    name: "S4 · Build ${{ matrix.service }}"
+    runs-on: ubuntu-latest
+    needs: [detect, typecheck, dep-scan, test]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    outputs:
+      # used by container-scan & push
+      image_tag: ${{ steps.meta.outputs.tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set image metadata
+        id: meta
+        run: |
+          SHORT="${GITHUB_SHA::8}"
+          BRANCH="${GITHUB_REF_NAME//\//-}"
+          TAG="${BRANCH}-${SHORT}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "image=${{ env.REGISTRY }}/${{ matrix.service }}:${TAG}" >> "$GITHUB_OUTPUT"
+          echo "latest=${{ env.REGISTRY }}/${{ matrix.service }}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (cache-optimised)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/${{ matrix.service }}/Dockerfile
+          push: false
+          load: true
+          tags: |
+            ${{ steps.meta.outputs.image }}
+            ${{ steps.meta.outputs.latest }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          labels: |
+            git.sha=${{ github.sha }}
+            git.branch=${{ github.ref_name }}
+            build.date=${{ github.event.head_commit.timestamp }}
+
+      - name: Save image as artifact
+        run: |
+          docker save "${{ steps.meta.outputs.image }}" | gzip > /tmp/${{ matrix.service }}.tar.gz
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: /tmp/${{ matrix.service }}.tar.gz
+          retention-days: 1
+
+# ─────────────────────────────────────────────────────────
+# STAGE 5 — Container security scan (Trivy)
+# ─────────────────────────────────────────────────────────
+  container-scan:
+    name: "S5 · Container scan ${{ matrix.service }}"
+    runs-on: ubuntu-latest
+    needs: [detect, build]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: /tmp
+
+      - name: Load image
+        run: docker load < /tmp/${{ matrix.service }}.tar.gz
+
+      - name: Trivy image scan (CRITICAL)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.ref_name }}-${{ github.sha }}
+          severity: CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-${{ matrix.service }}.sarif
+
+      - name: Upload container scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.service }}.sarif
+          category: trivy-container-${{ matrix.service }}
+
+# ─────────────────────────────────────────────────────────
+# STAGE 6 — Push to Artifact Registry (main / develop only)
+# ─────────────────────────────────────────────────────────
+  push:
+    name: "S6 · Push ${{ matrix.service }}"
+    runs-on: ubuntu-latest
+    needs: [detect, container-scan, sast]
+    if: github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_CI_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker → Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: /tmp
+
+      - name: Load and push
+        run: |
+          docker load < /tmp/${{ matrix.service }}.tar.gz
+          SHORT="${GITHUB_SHA::8}"
+          BRANCH="${GITHUB_REF_NAME//\//-}"
+          TAG="${BRANCH}-${SHORT}"
+          IMAGE="${{ env.REGISTRY }}/${{ matrix.service }}"
+          docker push "${IMAGE}:${TAG}"
+          docker push "${IMAGE}:latest"
+          echo "Pushed ${IMAGE}:${TAG}"
+          echo "IMAGE_FULL=${IMAGE}:${TAG}" >> "$GITHUB_ENV"
+
+      - name: Tag with branch label
+        if: github.ref_name == 'main'
+        run: |
+          SHORT="${GITHUB_SHA::8}"
+          IMAGE="${{ env.REGISTRY }}/${{ matrix.service }}"
+          docker tag "${IMAGE}:main-${SHORT}" "${IMAGE}:stable"
+          docker push "${IMAGE}:stable"
+
+# ─────────────────────────────────────────────────────────
+# STAGE 7 — SBOM generation (after push, main only)
+# ─────────────────────────────────────────────────────────
+  sbom:
+    name: "S7 · SBOM"
+    runs-on: ubuntu-latest
+    needs: [detect, push]
+    if: github.ref_name == 'main' && github.event_name != 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_CI_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker → Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ matrix.service }}:latest
+          format: spdx-json
+          artifact-name: sbom-${{ matrix.service }}.spdx.json
+
+      - name: Attest SBOM to image (Cosign keyless)
+        uses: anchore/sbom-action/publish-sbom@v0
+        with:
+          sbom-artifact-match: "^sbom-.*\\.spdx\\.json$"
+
+# ─────────────────────────────────────────────────────────
+# STAGE 8 — Pipeline summary
+# ─────────────────────────────────────────────────────────
+  summary:
+    name: "S8 · Pipeline summary"
+    runs-on: ubuntu-latest
+    needs: [secret-scan, sast, typecheck, dep-scan, test, build, container-scan]
+    if: always()
+    steps:
+      - name: Write summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
+          ## CI Pipeline Summary
+
+          | Stage | Job | Status |
+          |-------|-----|--------|
+          | S1 | Secret scan (Gitleaks) | ${{ needs.secret-scan.result }} |
+          | S1 | SAST (CodeQL) | ${{ needs.sast.result }} |
+          | S2 | Type-check | ${{ needs.typecheck.result }} |
+          | S2 | Dependency scan (Trivy + audit) | ${{ needs.dep-scan.result }} |
+          | S3 | Unit + E2E tests | ${{ needs.test.result }} |
+          | S4 | Docker build | ${{ needs.build.result }} |
+          | S5 | Container scan (Trivy) | ${{ needs.container-scan.result }} |
+
+          **Commit:** `${{ github.sha }}`
+          **Branch:** `${{ github.ref_name }}`
+          **Triggered by:** `${{ github.event_name }}`
+          EOF

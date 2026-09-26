@@ -32,6 +32,10 @@ done
 echo "→ Migrations"
 docker exec -i retail-postgres psql -U retail_app -d retail -v ON_ERROR_STOP=1 < "$ROOT/db/migrations/001_core.sql" 2>/dev/null || true
 docker exec -i retail-postgres psql -U retail_app -d retail -v ON_ERROR_STOP=1 < "$ROOT/db/migrations/002_automobile.sql"
+docker exec -i retail-postgres psql -U retail_app -d retail -v ON_ERROR_STOP=1 < "$ROOT/db/migrations/003_auth.sql"
+docker exec -i retail-postgres psql -U retail_app -d retail -v ON_ERROR_STOP=1 < "$ROOT/db/migrations/004_commerce_harden.sql"
+docker exec -i retail-postgres psql -U retail_app -d retail -v ON_ERROR_STOP=1 < "$ROOT/db/migrations/005_payments.sql"
+docker exec -i retail-postgres psql -U retail_app -d retail -v ON_ERROR_STOP=1 < "$ROOT/db/migrations/006_finance.sql"
 
 echo "→ Build shared packages"
 corepack enable 2>/dev/null || true

@@ -19,7 +19,8 @@ if ! docker exec retail-postgres pg_isready -U retail_app -d retail >/dev/null 2
 fi
 
 exec pnpm exec concurrently --kill-others-on-fail -c auto \
-  -n catalog,dealer,stock,price,drive,cart,order,finance,service,trade,bff,ui \
+  -n auth,catalog,dealer,stock,price,drive,cart,order,finance,service,trade,bff,ui \
+  "PORT=3111 DB_HOST=$DB_HOST DB_PORT=$DB_PORT DB_USER=$DB_USER DB_PASSWORD=$DB_PASSWORD DB_NAME=$DB_NAME DB_SSL=$DB_SSL pnpm --filter @retail/auth-service dev" \
   "PORT=3101 DB_HOST=$DB_HOST DB_PORT=$DB_PORT DB_USER=$DB_USER DB_PASSWORD=$DB_PASSWORD DB_NAME=$DB_NAME DB_SSL=$DB_SSL pnpm --filter @retail/vehicle-catalog-service dev" \
   "PORT=3102 DB_HOST=$DB_HOST DB_PORT=$DB_PORT DB_USER=$DB_USER DB_PASSWORD=$DB_PASSWORD DB_NAME=$DB_NAME DB_SSL=$DB_SSL pnpm --filter @retail/dealership-service dev" \
   "PORT=3103 DB_HOST=$DB_HOST DB_PORT=$DB_PORT DB_USER=$DB_USER DB_PASSWORD=$DB_PASSWORD DB_NAME=$DB_NAME DB_SSL=$DB_SSL pnpm --filter @retail/vehicle-inventory-service dev" \

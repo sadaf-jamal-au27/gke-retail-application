@@ -2,8 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { ServiceDeps } from "@retail/service-core";
 import { tradeInEstimate, requirePool } from "@retail/automobile-db";
 
-function reply404(reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
-  return reply.code(404).send({ error: "not_found" });
+function statusOf(err: unknown) {
+  return typeof err === "object" && err && "statusCode" in err ? Number((err as { statusCode: number }).statusCode) : 500;
 }
 
 export function registerRoutes(app: FastifyInstance, deps: ServiceDeps): void {
@@ -13,8 +13,19 @@ export function registerRoutes(app: FastifyInstance, deps: ServiceDeps): void {
     persistence: "postgresql",
   }));
 
-  app.post("/v1/trade-in/estimate", async (req) => {
-    const body = req.body as { make: string; model: string; year: number; kmDriven: number; condition: string };
-    return tradeInEstimate(requirePool(deps.db), body);
+  app.post("/v1/trade-in/estimate", async (req, reply) => {
+    const body = req.body as {
+      make: string;
+      model: string;
+      year: number;
+      kmDriven: number;
+      condition: string;
+      customerUserId?: string;
+    };
+    try {
+      return await tradeInEstimate(requirePool(deps.db), body);
+    } catch (err) {
+      return reply.code(statusOf(err)).send({ error: err instanceof Error ? err.message : "estimate_failed" });
+    }
   });
 }

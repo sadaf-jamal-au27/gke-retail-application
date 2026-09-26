@@ -1,4 +1,5 @@
 import { Link, NavLink } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 import { LiveStatsBar } from "./LiveStatsBar";
 
 const links = [
@@ -8,9 +9,12 @@ const links = [
   { to: "/finance", label: "Finance" },
   { to: "/service", label: "Service" },
   { to: "/trade-in", label: "Sell / exchange" },
+  { to: "/orders", label: "My orders" },
 ];
 
 export function SiteHeader() {
+  const { user, loading, logout } = useAuth();
+
   return (
     <header className="site-header">
       <div className="header-inner">
@@ -26,6 +30,19 @@ export function SiteHeader() {
               {l.label}
             </NavLink>
           ))}
+          {!loading &&
+            (user ? (
+              <span className="nav-user">
+                <span className="nav-link muted-inline">{user.fullName}</span>
+                <button type="button" className="nav-link linkish" onClick={() => void logout()}>
+                  Sign out
+                </button>
+              </span>
+            ) : (
+              <NavLink to="/login" className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}>
+                Sign in
+              </NavLink>
+            ))}
         </nav>
       </div>
       <LiveStatsBar />
