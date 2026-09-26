@@ -1,14 +1,27 @@
 name: Build & Push Images
 
+# ─────────────────────────────────────────────────────────
+# Lightweight build + push workflow (no security stages).
+# Use for manual re-builds or emergency deploys.
+# Full DevSecOps pipeline: ci.yml
+# ─────────────────────────────────────────────────────────
+
 on:
   push:
-    branches: [main, develop]
+    branches:
+      - main
+      - develop
+      - "release/v*"
+      - "hotfix/**"
     paths:
       - "services/**"
       - "packages/**"
       - ".github/workflows/build-push.yml"
   pull_request:
-    branches: [main, develop]
+    branches:
+      - main
+      - develop
+      - "release/v*"
     paths:
       - "services/**"
       - "packages/**"

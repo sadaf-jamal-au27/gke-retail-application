@@ -1,8 +1,18 @@
 name: PR Fast Check
 
+# ─────────────────────────────────────────────────────────
+# Runs on every PR regardless of source branch.
+# Target branches: main, develop, release/v*
+# Source branches: feature/**, hotfix/**, bugfix/**, chore/**
+# Target: ~3 min fast feedback loop
+# ─────────────────────────────────────────────────────────
+
 on:
   pull_request:
-    branches: [main, develop]
+    branches:
+      - main
+      - develop
+      - "release/v*"
 
 concurrency:
   group: pr-${{ github.event.pull_request.number }}
@@ -14,11 +24,13 @@ env:
 
 jobs:
   fast-check:
-    name: Type-check + build packages
+    name: "PR · Type-check + packages + security"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -37,12 +49,12 @@ jobs:
           pnpm --filter @retail/service-core build
           pnpm --filter @retail/automobile-db build
 
-      - name: Type-check
+      - name: Type-check shared packages
         run: |
           pnpm --filter @retail/service-core exec tsc --noEmit
           pnpm --filter @retail/automobile-db exec tsc --noEmit
 
-      - name: Secret scan (fast — staged files only)
+      - name: Secret scan (staged files only)
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -57,7 +69,10 @@ jobs:
               pull_number: context.issue.number,
             });
             const lines = files.reduce((s, f) => s + f.additions + f.deletions, 0);
-            const label = lines < 100 ? "size/S" : lines < 400 ? "size/M" : lines < 1000 ? "size/L" : "size/XL";
+            const label =
+              lines < 100  ? "size/S"  :
+              lines < 400  ? "size/M"  :
+              lines < 1000 ? "size/L"  : "size/XL";
             try {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
@@ -66,3 +81,39 @@ jobs:
                 labels: [label],
               });
             } catch {}
+
+      - name: PR branch name check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+            const target = context.payload.pull_request.base.ref;
+            const allowed = /^(feature|bugfix|chore|docs|refactor|test|hotfix|release)\/.+$/;
+            const hotfixToMain = branch.startsWith('hotfix/') && target === 'main';
+            const releaseToMain = branch.startsWith('release/') && target === 'main';
+
+            if (!allowed.test(branch)) {
+              core.warning(
+                `Branch name "${branch}" doesn't match convention: ` +
+                `feature/*, bugfix/*, chore/*, docs/*, refactor/*, test/*, hotfix/*, release/*`
+              );
+            }
+
+            // hotfix/* must target main OR develop (not develop-only)
+            if (branch.startsWith('hotfix/') && target !== 'main' && target !== 'develop') {
+              core.setFailed(`hotfix/* branches must target "main" or "develop", got "${target}"`);
+            }
+
+            // release/* must target main only
+            if (branch.startsWith('release/') && target !== 'main') {
+              core.setFailed(`release/* branches must target "main", got "${target}"`);
+            }
+
+            // feature/* must NOT target main directly
+            if (branch.startsWith('feature/') && target === 'main') {
+              core.setFailed(
+                `feature/* branches must target "develop" or "release/*", not "main" directly.`
+              );
+            }
+
+            core.notice(`Branch "${branch}" → "${target}" ✓`);

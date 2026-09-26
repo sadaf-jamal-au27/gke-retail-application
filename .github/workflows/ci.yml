@@ -1,10 +1,37 @@
 name: CI — DevSecOps Pipeline
 
+# ─────────────────────────────────────────────────────────
+# BRANCHING STRATEGY
+# ─────────────────────────────────────────────────────────
+#  main          →  production   (protected, PR-only, full CI required)
+#  develop       →  staging      (protected, PR-only, CI required)
+#  release/v*.*  →  RC / QA      (protected, PR-only, full CI required)
+#  feature/**    →  dev work     (PR → develop)
+#  hotfix/**     →  emergency    (PR → main + back-merge to develop)
+#
+# This workflow runs on:
+#   - push to main, develop, release/*, hotfix/*
+#   - PR targeting main, develop, release/*
+# ─────────────────────────────────────────────────────────
+
 on:
   push:
-    branches: [main, develop]
+    branches:
+      - main
+      - develop
+      - "release/v*"
+      - "hotfix/**"
+    paths:
+      - "services/**"
+      - "packages/**"
+      - "apps/**"
+      - "db/**"
+      - ".github/workflows/ci.yml"
   pull_request:
-    branches: [main, develop]
+    branches:
+      - main
+      - develop
+      - "release/v*"
   workflow_dispatch:
 
 concurrency:
@@ -14,8 +41,8 @@ concurrency:
 permissions:
   contents: read
   id-token: write          # WIF → Artifact Registry push
-  security-events: write   # CodeQL SARIF upload
-  pull-requests: write     # PR comments
+  security-events: write   # CodeQL + Trivy SARIF upload
+  pull-requests: write     # PR comments + labels
 
 env:
   PROJECT_ID: ai-rag-agent-project
@@ -23,6 +50,11 @@ env:
   REGISTRY: asia-south1-docker.pkg.dev/ai-rag-agent-project/retail
   NODE_VERSION: "22"
   PNPM_VERSION: "9.15.4"
+  ALL_SERVICES: >-
+    auth-service vehicle-catalog-service vehicle-inventory-service
+    dealership-service auto-pricing-service test-drive-service
+    auto-cart-service auto-order-service auto-finance-service
+    service-appointment-service trade-in-service bff-api-service
 
 # ─────────────────────────────────────────────────────────
 # STAGE 0 — Detect what changed
@@ -33,45 +65,80 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       services: ${{ steps.diff.outputs.services }}
-      matrix: ${{ steps.diff.outputs.matrix }}
-      any_changed: ${{ steps.diff.outputs.any_changed }}
+      matrix:   ${{ steps.diff.outputs.matrix }}
+      env_tag:  ${{ steps.env.outputs.env_tag }}
+      is_prod:  ${{ steps.env.outputs.is_prod }}
+      is_staging: ${{ steps.env.outputs.is_staging }}
+      is_rc:    ${{ steps.env.outputs.is_rc }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # Resolve target environment from branch name
+      - id: env
+        name: Resolve environment
+        run: |
+          REF="${GITHUB_REF_NAME}"
+          if [[ "$REF" == "main" ]]; then
+            echo "env_tag=stable"  >> "$GITHUB_OUTPUT"
+            echo "is_prod=true"    >> "$GITHUB_OUTPUT"
+            echo "is_staging=false" >> "$GITHUB_OUTPUT"
+            echo "is_rc=false"    >> "$GITHUB_OUTPUT"
+          elif [[ "$REF" == "develop" ]]; then
+            echo "env_tag=develop" >> "$GITHUB_OUTPUT"
+            echo "is_prod=false"   >> "$GITHUB_OUTPUT"
+            echo "is_staging=true" >> "$GITHUB_OUTPUT"
+            echo "is_rc=false"    >> "$GITHUB_OUTPUT"
+          elif [[ "$REF" == release/* ]]; then
+            VTAG="${REF##release/}"
+            echo "env_tag=rc-${VTAG}" >> "$GITHUB_OUTPUT"
+            echo "is_prod=false"  >> "$GITHUB_OUTPUT"
+            echo "is_staging=false" >> "$GITHUB_OUTPUT"
+            echo "is_rc=true"    >> "$GITHUB_OUTPUT"
+          elif [[ "$REF" == hotfix/* ]]; then
+            echo "env_tag=hotfix" >> "$GITHUB_OUTPUT"
+            echo "is_prod=false"  >> "$GITHUB_OUTPUT"
+            echo "is_staging=false" >> "$GITHUB_OUTPUT"
+            echo "is_rc=false"   >> "$GITHUB_OUTPUT"
+          else
+            echo "env_tag=pr"    >> "$GITHUB_OUTPUT"
+            echo "is_prod=false"  >> "$GITHUB_OUTPUT"
+            echo "is_staging=false" >> "$GITHUB_OUTPUT"
+            echo "is_rc=false"   >> "$GITHUB_OUTPUT"
+          fi
+
       - id: diff
         name: Identify changed services
         run: |
-          ALL="auth-service vehicle-catalog-service vehicle-inventory-service dealership-service
-               auto-pricing-service test-drive-service auto-cart-service auto-order-service
-               auto-finance-service service-appointment-service trade-in-service bff-api-service"
+          ALL="${{ env.ALL_SERVICES }}"
 
           BASE="${{ github.event.before }}"
           [[ -z "$BASE" || "$BASE" == "0000000000000000000000000000000000000000" ]] && BASE="HEAD~1"
 
           if git diff --name-only "$BASE" HEAD | grep -q '^packages/'; then
+            echo "Shared package changed — rebuilding all services"
             changed="$ALL"
           else
             changed=""
             for svc in $ALL; do
               git diff --name-only "$BASE" HEAD | grep -q "^services/${svc}/" && changed="$changed $svc"
             done
-            [[ -z "$changed" ]] && changed="$ALL"   # first push → build all
+            # First push or nothing detected → build all
+            [[ -z "$changed" ]] && changed="$ALL"
           fi
 
           changed=$(echo $changed | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')
           arr=$(echo "$changed" | tr ' ' '\n' | grep -v '^$' | jq -Rn '[inputs]')
-          echo "services=$changed" >> "$GITHUB_OUTPUT"
-          echo "matrix={\"service\":$arr}" >> "$GITHUB_OUTPUT"
-          echo "any_changed=true" >> "$GITHUB_OUTPUT"
+          echo "services=$changed"            >> "$GITHUB_OUTPUT"
+          echo "matrix={\"service\":$arr}"    >> "$GITHUB_OUTPUT"
           echo "Changed: $changed"
 
 # ─────────────────────────────────────────────────────────
-# STAGE 1-A — Secret scanning (Gitleaks) — runs immediately
+# STAGE 1-A — Secret scanning (Gitleaks)
 # ─────────────────────────────────────────────────────────
   secret-scan:
-    name: "S1 · Secret scan (Gitleaks)"
+    name: "S1-A · Secret scan (Gitleaks)"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -82,13 +149,13 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}   # optional — free for public repos
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}   # optional free for public repos
 
 # ─────────────────────────────────────────────────────────
-# STAGE 1-B — SAST (CodeQL) — detects JS/TS security issues
+# STAGE 1-B — SAST (CodeQL)
 # ─────────────────────────────────────────────────────────
   sast:
-    name: "S1 · SAST (CodeQL)"
+    name: "S1-B · SAST (CodeQL)"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -108,10 +175,10 @@ jobs:
           category: "/language:javascript-typescript"
 
 # ─────────────────────────────────────────────────────────
-# STAGE 2-A — TypeScript type-check (all packages + services)
+# STAGE 2-A — TypeScript type-check
 # ─────────────────────────────────────────────────────────
   typecheck:
-    name: "S2 · Type-check"
+    name: "S2-A · Type-check"
     runs-on: ubuntu-latest
     needs: [secret-scan]
     steps:
@@ -129,7 +196,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Type-check packages
+      - name: Type-check shared packages
         run: |
           pnpm --filter @retail/service-core exec tsc --noEmit
           pnpm --filter @retail/automobile-db exec tsc --noEmit
@@ -146,7 +213,7 @@ jobs:
 # STAGE 2-B — Dependency vulnerability scan
 # ─────────────────────────────────────────────────────────
   dep-scan:
-    name: "S2 · Dependency scan (audit + Trivy)"
+    name: "S2-B · Dependency scan"
     runs-on: ubuntu-latest
     needs: [secret-scan]
     steps:
@@ -166,7 +233,7 @@ jobs:
 
       - name: pnpm audit (high + critical)
         run: pnpm audit --audit-level=high
-        continue-on-error: true   # warn but don't block on known dep issues
+        continue-on-error: true   # advisory — don't block on unfixed upstream deps
 
       - name: Trivy filesystem scan (CRITICAL/HIGH CVEs)
         uses: aquasecurity/trivy-action@master
@@ -179,7 +246,7 @@ jobs:
           format: sarif
           output: trivy-fs.sarif
 
-      - name: Upload Trivy FS results to GitHub Security
+      - name: Upload Trivy FS SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
@@ -190,7 +257,7 @@ jobs:
 # STAGE 3 — Unit + integration tests
 # ─────────────────────────────────────────────────────────
   test:
-    name: "S3 · Unit & integration tests"
+    name: "S3 · Tests"
     runs-on: ubuntu-latest
     needs: [typecheck]
 
@@ -236,7 +303,7 @@ jobs:
         run: |
           export PGPASSWORD=retail
           for f in db/migrations/*.sql; do
-            echo "Applying $f"
+            echo "▶ Applying $f"
             psql -h 127.0.0.1 -U retail_app -d retail -v ON_ERROR_STOP=1 -f "$f"
           done
 
@@ -246,17 +313,17 @@ jobs:
           pnpm --filter @retail/automobile-db build
 
       - name: Run unit tests
-        run: |
-          if pnpm -r --if-present test 2>&1 | grep -q 'no script'; then
-            echo "No unit tests yet — skipping (add test scripts to package.json)"
-          else
-            pnpm -r --if-present test
-          fi
+        run: pnpm -r --if-present test
 
-      - name: E2E smoke test (API assertions)
-        run: bash testing/e2e/run-smoke.sh
+      - name: E2E smoke test
+        run: |
+          if [[ -f testing/e2e/run-smoke.sh ]]; then
+            bash testing/e2e/run-smoke.sh
+          else
+            echo "No smoke tests yet — skipping"
+          fi
         timeout-minutes: 5
-        continue-on-error: true   # smoke is advisory until fully stable
+        continue-on-error: true   # advisory until smoke suite is stable
 
 # ─────────────────────────────────────────────────────────
 # STAGE 4 — Build Docker images (parallel per service)
@@ -268,22 +335,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
-    outputs:
-      # used by container-scan & push
-      image_tag: ${{ steps.meta.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set image metadata
+      - name: Compute image tags
         id: meta
         run: |
           SHORT="${GITHUB_SHA::8}"
           BRANCH="${GITHUB_REF_NAME//\//-}"
-          TAG="${BRANCH}-${SHORT}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "image=${{ env.REGISTRY }}/${{ matrix.service }}:${TAG}" >> "$GITHUB_OUTPUT"
-          echo "latest=${{ env.REGISTRY }}/${{ matrix.service }}:latest" >> "$GITHUB_OUTPUT"
+          ENV_TAG="${{ needs.detect.outputs.env_tag }}"
+          echo "branch_tag=${BRANCH}-${SHORT}"   >> "$GITHUB_OUTPUT"
+          echo "env_tag=${ENV_TAG}-${SHORT}"     >> "$GITHUB_OUTPUT"
+          echo "image=${{ env.REGISTRY }}/${{ matrix.service }}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -296,8 +360,8 @@ jobs:
           push: false
           load: true
           tags: |
-            ${{ steps.meta.outputs.image }}
-            ${{ steps.meta.outputs.latest }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.branch_tag }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.env_tag }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
           labels: |
@@ -305,9 +369,10 @@ jobs:
             git.branch=${{ github.ref_name }}
             build.date=${{ github.event.head_commit.timestamp }}
 
-      - name: Save image as artifact
+      - name: Save image artifact
         run: |
-          docker save "${{ steps.meta.outputs.image }}" | gzip > /tmp/${{ matrix.service }}.tar.gz
+          docker save "${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.branch_tag }}" \
+            | gzip > /tmp/${{ matrix.service }}.tar.gz
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v4
@@ -339,17 +404,18 @@ jobs:
       - name: Load image
         run: docker load < /tmp/${{ matrix.service }}.tar.gz
 
-      - name: Trivy image scan (CRITICAL)
+      - name: Trivy container scan (CRITICAL only)
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.ref_name }}-${{ github.sha }}
+          image-ref: >-
+            ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.ref_name }}-${{ github.sha }}
           severity: CRITICAL
           exit-code: "1"
           ignore-unfixed: true
           format: sarif
           output: trivy-${{ matrix.service }}.sarif
 
-      - name: Upload container scan results
+      - name: Upload container scan SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
@@ -357,7 +423,11 @@ jobs:
           category: trivy-container-${{ matrix.service }}
 
 # ─────────────────────────────────────────────────────────
-# STAGE 6 — Push to Artifact Registry (main / develop only)
+# STAGE 6 — Push to Artifact Registry
+#   main   → :main-{sha}  :stable  :latest
+#   develop→ :develop-{sha} :develop-latest
+#   release→ :rc-v*-{sha} :rc-latest
+#   hotfix → :hotfix-{sha} (no :latest override)
 # ─────────────────────────────────────────────────────────
   push:
     name: "S6 · Push ${{ matrix.service }}"
@@ -386,31 +456,54 @@ jobs:
           name: image-${{ matrix.service }}
           path: /tmp
 
-      - name: Load and push
+      - name: Load image
+        run: docker load < /tmp/${{ matrix.service }}.tar.gz
+
+      - name: Push images with environment tags
         run: |
-          docker load < /tmp/${{ matrix.service }}.tar.gz
           SHORT="${GITHUB_SHA::8}"
           BRANCH="${GITHUB_REF_NAME//\//-}"
-          TAG="${BRANCH}-${SHORT}"
           IMAGE="${{ env.REGISTRY }}/${{ matrix.service }}"
-          docker push "${IMAGE}:${TAG}"
-          docker push "${IMAGE}:latest"
-          echo "Pushed ${IMAGE}:${TAG}"
-          echo "IMAGE_FULL=${IMAGE}:${TAG}" >> "$GITHUB_ENV"
+          ENV_TAG="${{ needs.detect.outputs.env_tag }}"
 
-      - name: Tag with branch label
-        if: github.ref_name == 'main'
-        run: |
-          SHORT="${GITHUB_SHA::8}"
-          IMAGE="${{ env.REGISTRY }}/${{ matrix.service }}"
-          docker tag "${IMAGE}:main-${SHORT}" "${IMAGE}:stable"
-          docker push "${IMAGE}:stable"
+          # Always push branch-sha tag
+          docker tag "${IMAGE}:${BRANCH}-${SHORT}" "${IMAGE}:${BRANCH}-${SHORT}" 2>/dev/null || true
+          docker push "${IMAGE}:${BRANCH}-${SHORT}"
+
+          # Push environment-specific alias
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            docker tag "${IMAGE}:${BRANCH}-${SHORT}" "${IMAGE}:latest"
+            docker tag "${IMAGE}:${BRANCH}-${SHORT}" "${IMAGE}:stable"
+            docker push "${IMAGE}:latest"
+            docker push "${IMAGE}:stable"
+            echo "✅ Pushed :latest and :stable (production)"
+
+          elif [[ "${{ github.ref_name }}" == "develop" ]]; then
+            docker tag "${IMAGE}:${BRANCH}-${SHORT}" "${IMAGE}:develop-latest"
+            docker push "${IMAGE}:develop-latest"
+            echo "✅ Pushed :develop-latest (staging)"
+
+          elif [[ "${{ github.ref_name }}" == release/* ]]; then
+            VTAG="${GITHUB_REF_NAME##release/}"
+            docker tag "${IMAGE}:${BRANCH}-${SHORT}" "${IMAGE}:rc-latest"
+            docker tag "${IMAGE}:${BRANCH}-${SHORT}" "${IMAGE}:rc-${VTAG}"
+            docker push "${IMAGE}:rc-latest"
+            docker push "${IMAGE}:rc-${VTAG}"
+            echo "✅ Pushed :rc-${VTAG} (QA / release candidate)"
+
+          elif [[ "${{ github.ref_name }}" == hotfix/* ]]; then
+            docker tag "${IMAGE}:${BRANCH}-${SHORT}" "${IMAGE}:hotfix-latest"
+            docker push "${IMAGE}:hotfix-latest"
+            echo "✅ Pushed :hotfix-latest"
+          fi
+
+          echo "IMAGE_FULL=${IMAGE}:${BRANCH}-${SHORT}" >> "$GITHUB_ENV"
 
 # ─────────────────────────────────────────────────────────
-# STAGE 7 — SBOM generation (after push, main only)
+# STAGE 7 — SBOM generation (main only — production images)
 # ─────────────────────────────────────────────────────────
   sbom:
-    name: "S7 · SBOM"
+    name: "S7 · SBOM ${{ matrix.service }}"
     runs-on: ubuntu-latest
     needs: [detect, push]
     if: github.ref_name == 'main' && github.event_name != 'pull_request'
@@ -430,7 +523,7 @@ jobs:
       - name: Configure Docker → Artifact Registry
         run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
 
-      - name: Generate SBOM with Syft
+      - name: Generate SBOM (Syft / SPDX-JSON)
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.REGISTRY }}/${{ matrix.service }}:latest
@@ -443,30 +536,39 @@ jobs:
           sbom-artifact-match: "^sbom-.*\\.spdx\\.json$"
 
 # ─────────────────────────────────────────────────────────
-# STAGE 8 — Pipeline summary
+# STAGE 8 — Pipeline summary (always)
 # ─────────────────────────────────────────────────────────
   summary:
-    name: "S8 · Pipeline summary"
+    name: "S8 · Summary"
     runs-on: ubuntu-latest
-    needs: [secret-scan, sast, typecheck, dep-scan, test, build, container-scan]
+    needs: [detect, secret-scan, sast, typecheck, dep-scan, test, build, container-scan]
     if: always()
     steps:
-      - name: Write summary
+      - name: Write step summary
         run: |
-          cat >> "$GITHUB_STEP_SUMMARY" << 'EOF'
-          ## CI Pipeline Summary
+          ENV="${{ needs.detect.outputs.env_tag }}"
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          ## CI Pipeline — ${GITHUB_REF_NAME}
 
           | Stage | Job | Status |
           |-------|-----|--------|
-          | S1 | Secret scan (Gitleaks) | ${{ needs.secret-scan.result }} |
-          | S1 | SAST (CodeQL) | ${{ needs.sast.result }} |
-          | S2 | Type-check | ${{ needs.typecheck.result }} |
-          | S2 | Dependency scan (Trivy + audit) | ${{ needs.dep-scan.result }} |
-          | S3 | Unit + E2E tests | ${{ needs.test.result }} |
-          | S4 | Docker build | ${{ needs.build.result }} |
-          | S5 | Container scan (Trivy) | ${{ needs.container-scan.result }} |
+          | S1-A | Secret scan (Gitleaks) | ${{ needs.secret-scan.result }} |
+          | S1-B | SAST (CodeQL) | ${{ needs.sast.result }} |
+          | S2-A | Type-check | ${{ needs.typecheck.result }} |
+          | S2-B | Dependency scan (Trivy + audit) | ${{ needs.dep-scan.result }} |
+          | S3   | Unit + E2E tests | ${{ needs.test.result }} |
+          | S4   | Docker build | ${{ needs.build.result }} |
+          | S5   | Container scan (Trivy) | ${{ needs.container-scan.result }} |
 
-          **Commit:** `${{ github.sha }}`
-          **Branch:** `${{ github.ref_name }}`
-          **Triggered by:** `${{ github.event_name }}`
+          **Environment:** \`${ENV}\`
+          **Branch:** \`${GITHUB_REF_NAME}\`
+          **Commit:** \`${GITHUB_SHA}\`
+          **Triggered by:** \`${{ github.event_name }}\`
+
+          ### Image tags pushed
+          \`\`\`
+          ${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::8}
+          ${ENV}
+          $([ "${GITHUB_REF_NAME}" == "main" ] && echo "stable\nlatest")
+          \`\`\`
           EOF
