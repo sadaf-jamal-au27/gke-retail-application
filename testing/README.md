@@ -1,5 +1,5 @@
 
-# Testingsss
+# Testing
 
 ```bash
 pnpm test:e2e              # smoke testing: DB + catalog + BFF
