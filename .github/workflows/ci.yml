@@ -432,12 +432,18 @@ jobs:
           echo "tag=${BRANCH}-${SHORT}" >> "$GITHUB_OUTPUT"
 
       - name: Trivy container scan (CRITICAL only)
+        # Hard gate on merges to main/develop; advisory on PRs.
+        # distroless/nodejs22-debian12 OS packages may have CRITICAL CVEs pending
+        # a Google image rebuild — PRs still get the SARIF report in Security tab.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: "${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.ref.outputs.tag }}"
           severity: CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+          scanners: vuln
+          trivyignores: .trivyignore
           format: sarif
           output: trivy-${{ matrix.service }}.sarif
 

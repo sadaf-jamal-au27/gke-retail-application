@@ -4,6 +4,11 @@
 # Format: one advisory ID per line (GHSA-* or CVE-*)
 # Reason must be documented as a comment above each entry.
 # Review this file on every dependency update.
+#
+# Policy:
+#   - Transitive dep CVEs we cannot directly patch: suppress + track upstream
+#   - Distroless base-image OS CVEs: suppressed for PRs via continue-on-error;
+#     hard gate remains active on merges to main/develop (see ci.yml S5).
 # ─────────────────────────────────────────────────────────
 
 # uuid@9.0.1 — buffer bounds check in v3/v5/v6 when `buf` is provided.
