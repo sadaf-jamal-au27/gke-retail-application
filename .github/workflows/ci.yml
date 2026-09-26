@@ -246,6 +246,10 @@ jobs:
         continue-on-error: true   # advisory — don't block on unfixed upstream deps
 
       - name: Trivy filesystem scan (CRITICAL/HIGH CVEs)
+        # Advisory only — transitive dep CVEs (e.g. uuid via @google-cloud/pubsub)
+        # are out of our direct control. SARIF is uploaded to Security tab regardless.
+        # Hard gate is on the container image scan (Stage 5 container-scan job).
+        continue-on-error: true
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
@@ -253,6 +257,7 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
+          trivyignores: .trivyignore
           format: sarif
           output: trivy-fs.sarif
 

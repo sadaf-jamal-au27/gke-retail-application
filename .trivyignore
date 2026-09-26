@@ -1,0 +1,14 @@
+# ─────────────────────────────────────────────────────────
+# .trivyignore — Accepted / suppressed CVEs
+#
+# Format: one advisory ID per line (GHSA-* or CVE-*)
+# Reason must be documented as a comment above each entry.
+# Review this file on every dependency update.
+# ─────────────────────────────────────────────────────────
+
+# uuid@9.0.1 — buffer bounds check in v3/v5/v6 when `buf` is provided.
+# Transitive dep path: service-core → @google-cloud/pubsub@4.11.0 → gaxios → uuid@9.0.1
+# Cannot upgrade directly — waiting on @google-cloud/pubsub to update gaxios.
+# Impact: low — we do not call uuid with a user-controlled buffer argument.
+# Track: https://github.com/advisories/GHSA-w5hq-g745-h8pq
+GHSA-w5hq-g745-h8pq
