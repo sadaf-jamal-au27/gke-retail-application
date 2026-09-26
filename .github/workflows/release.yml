@@ -122,26 +122,26 @@ jobs:
               }
             }
 
+  resolve-matrix:
+    name: Resolve service matrix
+    runs-on: ubuntu-latest
+    needs: create-release
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        run: |
+          arr=$(echo "${{ env.ALL_SERVICES }}" | tr ' ' '\n' | grep -v '^$' | jq -Rcn '[inputs]')
+          echo "matrix={\"service\":${arr}}" >> "$GITHUB_OUTPUT"
+
   tag-images:
     name: Tag images with release version
     runs-on: ubuntu-latest
-    needs: create-release
+    timeout-minutes: 10
+    needs: [create-release, resolve-matrix]
     strategy:
       fail-fast: false
-      matrix:
-        service:
-          - auth-service
-          - vehicle-catalog-service
-          - vehicle-inventory-service
-          - dealership-service
-          - auto-pricing-service
-          - test-drive-service
-          - auto-cart-service
-          - auto-order-service
-          - auto-finance-service
-          - service-appointment-service
-          - trade-in-service
-          - bff-api-service
+      matrix: ${{ fromJson(needs.resolve-matrix.outputs.matrix) }}
 
     steps:
       - name: Authenticate to GCP (WIF)
@@ -173,7 +173,8 @@ jobs:
   notify-devops:
     name: Notify DevOps repo to deploy
     runs-on: ubuntu-latest
-    needs: [create-release, tag-images]
+    timeout-minutes: 5
+    needs: [create-release, resolve-matrix, tag-images]
     if: success()
     steps:
       - name: Dispatch deploy event to DevOps repo

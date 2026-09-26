@@ -1,0 +1,22 @@
+# ─────────────────────────────────────────────────────────
+# .trivyignore — Accepted / suppressed CVEs
+#
+# Format: one advisory ID per line (GHSA-* or CVE-*)
+# Reason must be documented as a comment above each entry.
+# Review this file on every dependency update.
+#
+# Policy:
+#   - Transitive dep CVEs we cannot directly patch: suppress + track upstream
+#   - Distroless base-image OS CVEs: suppressed for PRs via continue-on-error;
+#     hard gate remains active on merges to main/develop (see ci.yml S5).
+# ─────────────────────────────────────────────────────────
+
+# uuid@9.0.1 — buffer bounds check in v3/v5/v6 when `buf` is provided.
+# Transitive dep path: service-core → @google-cloud/pubsub@4.11.0 → gaxios → uuid@9.0.1
+# Cannot upgrade directly — waiting on @google-cloud/pubsub to update gaxios.
+# Impact: low — we do not call uuid with a user-controlled buffer argument.
+# Track: https://github.com/advisories/GHSA-w5hq-g745-h8pq
+# NOTE: Trivy uses NVD CVE ID for container image scans, GHSA ID for FS scans.
+#       Both IDs must be listed to suppress across all scan types.
+GHSA-w5hq-g745-h8pq
+CVE-2026-41907

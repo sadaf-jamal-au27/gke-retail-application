@@ -1,34 +1,21 @@
-name: Build & Push Images
+name: Build & Push Images (Emergency / Manual)
 
 # ─────────────────────────────────────────────────────────
-# Lightweight build + push workflow (no security stages).
-# Use for manual re-builds or emergency deploys.
+# MANUAL-ONLY emergency build + push (no security stages).
+# Use only when ci.yml is broken or for a hotfix re-push.
+#
+# ⚠️  Do NOT add push/pull_request triggers here — they
+#     would duplicate ci.yml causing double builds and
+#     double image pushes on every commit.
+#
 # Full DevSecOps pipeline: ci.yml
 # ─────────────────────────────────────────────────────────
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-      - "release/v*"
-      - "hotfix/**"
-    paths:
-      - "services/**"
-      - "packages/**"
-      - ".github/workflows/build-push.yml"
-  pull_request:
-    branches:
-      - main
-      - develop
-      - "release/v*"
-    paths:
-      - "services/**"
-      - "packages/**"
   workflow_dispatch:
     inputs:
       services:
-        description: "Comma-separated services to build (or 'all')"
+        description: "Space or comma-separated services to build (or 'all')"
         required: false
         default: "all"
 
@@ -159,8 +146,7 @@ jobs:
             --cache-from "${{ steps.tag.outputs.latest }}" \
             .
 
-      - name: Push images (main/develop only)
-        if: github.event_name != 'pull_request'
+      - name: Push images
         run: |
           docker push "${{ steps.tag.outputs.image }}"
           docker push "${{ steps.tag.outputs.latest }}"
@@ -170,9 +156,8 @@ jobs:
     name: Build storefront
     runs-on: ubuntu-latest
     if: >-
-      github.event_name != 'pull_request' &&
-      (contains(github.event.commits[0].modified, 'apps/storefront') ||
-       github.event_name == 'workflow_dispatch')
+      github.event.inputs.services == 'all' ||
+      contains(github.event.inputs.services, 'storefront')
     steps:
       - uses: actions/checkout@v4
 

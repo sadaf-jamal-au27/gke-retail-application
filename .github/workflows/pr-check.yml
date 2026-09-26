@@ -93,9 +93,9 @@ jobs:
             const releaseToMain = branch.startsWith('release/') && target === 'main';
 
             if (!allowed.test(branch)) {
-              core.warning(
-                `Branch name "${branch}" doesn't match convention: ` +
-                `feature/*, bugfix/*, chore/*, docs/*, refactor/*, test/*, hotfix/*, release/*`
+              core.setFailed(
+                `Branch name "${branch}" doesn't match naming convention.\n` +
+                `Expected one of: feature/*, bugfix/*, chore/*, docs/*, refactor/*, test/*, hotfix/*, release/*`
               );
             }
 

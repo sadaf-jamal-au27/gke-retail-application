@@ -63,6 +63,7 @@ jobs:
   detect:
     name: "S0 · Detect changes"
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       services: ${{ steps.diff.outputs.services }}
       matrix:   ${{ steps.diff.outputs.matrix }}
@@ -113,7 +114,12 @@ jobs:
         run: |
           ALL="${{ env.ALL_SERVICES }}"
 
-          BASE="${{ github.event.before }}"
+          # For PRs use base branch SHA; for push use event.before
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
           [[ -z "$BASE" || "$BASE" == "0000000000000000000000000000000000000000" ]] && BASE="HEAD~1"
 
           if git diff --name-only "$BASE" HEAD | grep -q '^packages/'; then
@@ -140,6 +146,7 @@ jobs:
   secret-scan:
     name: "S1-A · Secret scan (Gitleaks)"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -157,6 +164,7 @@ jobs:
   sast:
     name: "S1-B · SAST (CodeQL)"
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -180,6 +188,7 @@ jobs:
   typecheck:
     name: "S2-A · Type-check"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [secret-scan]
     steps:
       - uses: actions/checkout@v4
@@ -215,6 +224,7 @@ jobs:
   dep-scan:
     name: "S2-B · Dependency scan"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [secret-scan]
     steps:
       - uses: actions/checkout@v4
@@ -236,6 +246,10 @@ jobs:
         continue-on-error: true   # advisory — don't block on unfixed upstream deps
 
       - name: Trivy filesystem scan (CRITICAL/HIGH CVEs)
+        # Advisory only — transitive dep CVEs (e.g. uuid via @google-cloud/pubsub)
+        # are out of our direct control. SARIF is uploaded to Security tab regardless.
+        # Hard gate is on the container image scan (Stage 5 container-scan job).
+        continue-on-error: true
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
@@ -243,12 +257,14 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
+          trivyignores: .trivyignore
           format: sarif
           output: trivy-fs.sarif
 
       - name: Upload Trivy FS SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && hashFiles('trivy-fs.sarif') != ''
+        continue-on-error: true   # SARIF may not exist if Trivy crashed before writing
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-filesystem
@@ -259,6 +275,7 @@ jobs:
   test:
     name: "S3 · Tests"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [typecheck]
 
     services:
@@ -331,6 +348,7 @@ jobs:
   build:
     name: "S4 · Build ${{ matrix.service }}"
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [detect, typecheck, dep-scan, test]
     strategy:
       fail-fast: false
@@ -345,8 +363,10 @@ jobs:
           SHORT="${GITHUB_SHA::8}"
           BRANCH="${GITHUB_REF_NAME//\//-}"
           ENV_TAG="${{ needs.detect.outputs.env_tag }}"
-          echo "branch_tag=${BRANCH}-${SHORT}"   >> "$GITHUB_OUTPUT"
-          echo "env_tag=${ENV_TAG}-${SHORT}"     >> "$GITHUB_OUTPUT"
+          echo "branch_tag=${BRANCH}-${SHORT}"               >> "$GITHUB_OUTPUT"
+          echo "env_tag=${ENV_TAG}-${SHORT}"                 >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT}"                          >> "$GITHUB_OUTPUT"
+          echo "safe_branch=${BRANCH}"                       >> "$GITHUB_OUTPUT"
           echo "image=${{ env.REGISTRY }}/${{ matrix.service }}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
@@ -387,6 +407,7 @@ jobs:
   container-scan:
     name: "S5 · Container scan ${{ matrix.service }}"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [detect, build]
     strategy:
       fail-fast: false
@@ -404,14 +425,28 @@ jobs:
       - name: Load image
         run: docker load < /tmp/${{ matrix.service }}.tar.gz
 
-      - name: Trivy container scan (CRITICAL only)
+      - name: Resolve image tag (must match build stage)
+        id: ref
+        run: |
+          SHORT="${GITHUB_SHA::8}"
+          BRANCH="${GITHUB_REF_NAME//\//-}"
+          echo "tag=${BRANCH}-${SHORT}" >> "$GITHUB_OUTPUT"
+
+      - name: Trivy container scan (CRITICAL/HIGH — library only)
+        # Hard gate on Node.js packages we control (vuln-type: library).
+        # OS packages are skipped — distroless OS is Google-maintained;
+        # we cannot patch individual OS packages in a distroless image.
+        # OS-level CVEs are tracked via Google Container Analysis post-push.
+        id: trivy-lib
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: >-
-            ${{ env.REGISTRY }}/${{ matrix.service }}:${{ github.ref_name }}-${{ github.sha }}
-          severity: CRITICAL
+          image-ref: "${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.ref.outputs.tag }}"
+          severity: CRITICAL,HIGH
           exit-code: "1"
           ignore-unfixed: true
+          vuln-type: library
+          scanners: vuln
+          trivyignores: .trivyignore
           format: sarif
           output: trivy-${{ matrix.service }}.sarif
 
@@ -432,6 +467,7 @@ jobs:
   push:
     name: "S6 · Push ${{ matrix.service }}"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [detect, container-scan, sast]
     if: github.event_name != 'pull_request'
     strategy:
