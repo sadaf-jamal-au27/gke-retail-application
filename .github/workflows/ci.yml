@@ -431,13 +431,12 @@ jobs:
           BRANCH="${GITHUB_REF_NAME//\//-}"
           echo "tag=${BRANCH}-${SHORT}" >> "$GITHUB_OUTPUT"
 
-      - name: Trivy container scan — Node packages (CRITICAL)
-        # Scans only library/language packages (our Node.js code + deps).
-        # We intentionally skip OS packages (vuln-type: library) because
-        # distroless/nodejs22-debian12 OS packages are Google-maintained and
-        # we cannot patch them — Google rebuilds the image when CVEs are fixed.
-        # OS-level CVEs are tracked separately via Google Container Analysis
-        # once the image is pushed to Artifact Registry (post-merge only).
+      - name: Trivy container scan (CRITICAL/HIGH — library only)
+        # Hard gate on Node.js packages we control (vuln-type: library).
+        # OS packages are skipped — distroless OS is Google-maintained;
+        # we cannot patch individual OS packages in a distroless image.
+        # OS-level CVEs are tracked via Google Container Analysis post-push.
+        id: trivy-lib
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: "${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.ref.outputs.tag }}"
@@ -450,35 +449,12 @@ jobs:
           format: sarif
           output: trivy-${{ matrix.service }}.sarif
 
-      - name: Trivy container scan — OS packages (advisory)
-        # Advisory-only scan of the distroless OS layer. Never blocks the pipeline.
-        # Results surface in the GitHub Security tab for awareness.
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: "${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.ref.outputs.tag }}"
-          severity: CRITICAL,HIGH
-          exit-code: "0"
-          ignore-unfixed: true
-          vuln-type: os
-          scanners: vuln
-          trivyignores: .trivyignore
-          format: sarif
-          output: trivy-${{ matrix.service }}-os.sarif
-
-      - name: Upload Node package scan SARIF
+      - name: Upload container scan SARIF
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: trivy-${{ matrix.service }}.sarif
-          category: trivy-container-lib-${{ matrix.service }}
-
-      - name: Upload OS scan SARIF
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy-${{ matrix.service }}-os.sarif
-          category: trivy-container-os-${{ matrix.service }}
+          category: trivy-container-${{ matrix.service }}
 
 # ─────────────────────────────────────────────────────────
 # STAGE 6 — Push to Artifact Registry
