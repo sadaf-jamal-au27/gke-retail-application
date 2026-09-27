@@ -5,7 +5,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/service-core ./packages/service-core
 COPY packages/automobile-db ./packages/automobile-db
 COPY services/auto-finance-service ./services/auto-finance-service
-RUN corepack enable && pnpm install --frozen-lockfile
+RUN printf 'shamefully-hoist=true\n' > .npmrc && corepack enable && pnpm install --frozen-lockfile
 RUN pnpm --filter @retail/service-core build
 RUN pnpm --filter @retail/automobile-db build
 RUN pnpm --filter @retail/auto-finance-service build

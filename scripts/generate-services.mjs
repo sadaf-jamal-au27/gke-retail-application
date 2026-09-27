@@ -114,7 +114,8 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/service-core ./packages/service-core
 COPY services/${name} ./services/${name}
-RUN corepack enable && pnpm install --frozen-lockfile
+RUN printf 'shamefully-hoist=true\\n' > .npmrc && corepack enable && pnpm install --frozen-lockfile
+RUN pnpm --filter @retail/service-core build
 RUN pnpm --filter @retail/${name} build
 
 FROM gcr.io/distroless/nodejs22-debian12:nonroot
